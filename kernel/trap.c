@@ -37,7 +37,6 @@ void
 usertrap(void)
 {
   int which_dev = 0;
-
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
 
@@ -65,10 +64,53 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if (r_scause() == 15) {
+    // store page fault
+    uint64 va = r_stval();
+    if (va >= MAXVA) {
+      goto err;
+    }
+    pte_t *pte = walk(p->pagetable, va, 0); // get the corresponding pte
+    if (pte == 0) {
+      goto err;
+    }
+    uint64 pa0 = PTE2PA(*pte);
+
+    if ((*pte & PTE_C) == 0 && (*pte & PTE_W) == 0) {
+      // not a cow page
+      goto err;
+    }
+    // cow page
+    acquire(&ref_lock);
+    if (REF(pa0) == 1) {
+      *pte |= PTE_W;
+      *pte &= ~PTE_C;
+    } else if (REF(pa0) > 1) {
+      uint64 pa = (uint64)kalloc();
+      if (pa == 0) {
+        release(&ref_lock);
+        goto err;
+      }
+      memmove((void*)pa, (void*)pa0, PGSIZE);
+      
+      REF_DEC(pa0);
+      
+      // set PTE_W and clear PTE_C
+      *pte |= PTE_W;
+      *pte &= ~PTE_C;
+      // modify original pte
+      *pte = PA2PTE(pa) | PTE_FLAGS(*pte);
+    } else {
+      release(&ref_lock);
+      goto err;
+    }
+    release(&ref_lock);
+
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+  err:
+    printf("usertrap(): unexpected scause %p pid=%d\n, pa=%p", r_scause(), p->pid, walkaddr(p->pagetable, r_sepc()));
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
