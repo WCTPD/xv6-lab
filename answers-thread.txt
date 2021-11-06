@@ -1,0 +1,3 @@
+When 2 threads have same i in put(), before one thread assigns n to e->next,
+it might be swithed to the other thread. After the other thread finishes insert
+function, this thread continues to perform e->next = n.
