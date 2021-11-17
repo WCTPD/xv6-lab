@@ -119,7 +119,7 @@ e1000_transmit(struct mbuf *m)
   des->cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS;
   tx_mbufs[idx] = m;
 
-  regs[E1000_TDT] = (regs[E1000_TDT] + 1) % E1000_TDLEN;
+  regs[E1000_TDT] = (regs[E1000_TDT] + 1) % TX_RING_SIZE;
   release(&e1000_lock);
   return 0;
 }
@@ -133,25 +133,24 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver an mbuf for each packet (using net_rx()).
   //
-  
+  uint64 base = regs[E1000_RDBAL];
   int idx = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
-  uint64 base = (uint64)regs[E1000_RDBAL];
-  struct rx_desc* des = ((struct rx_desc*)base) + idx;
+  struct tx_desc *des = ((struct tx_desc*)base) + idx;
   while (des->status & E1000_RXD_STAT_DD) {
-    //acquire(&e1000_lock);
-    struct mbuf* m = rx_mbufs[idx];
+    acquire(&e1000_lock);
+    struct mbuf *m = rx_mbufs[idx];
     mbufput(m, des->length);
-    net_rx(m);
-    rx_mbufs[idx] = mbufalloc(0);
-    m = rx_mbufs[idx];
+    struct mbuf *tmp = m;
+    m = mbufalloc(0);
+    rx_mbufs[idx] = m;
     des->addr = (uint64)m->head;
     des->status = 0;
-    idx = (idx + 1) % RX_RING_SIZE;
     regs[E1000_RDT] = idx;
-    des = ((struct rx_desc*)base) + idx;
-    //release(&e1000_lock);
+    release(&e1000_lock);
+    net_rx(tmp);
+    idx = (idx + 1) % RX_RING_SIZE;
+    des = ((struct tx_desc*)base) + idx;
   }
-  regs[E1000_RDT] = (regs[E1000_RDT] - 1) % RX_RING_SIZE;
 }
 
 void
